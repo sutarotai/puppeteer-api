@@ -8,160 +8,72 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-const CHROME_EXECUTABLE_PATH = "/usr/bin/chromium";
+const CHROME_EXECUTABLE_PATH = "/usr/bin/chromium"; // optional, thêm nếu biết chính xác
 
-async function launchBrowser() {
-  return await puppeteer.launch({
-    headless: "new",
-    executablePath: CHROME_EXECUTABLE_PATH,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
-}
+app.post("/extract-all-text", async (req, res) => {
+  const { url } = req.body;
 
-// Endpoint kiểm tra server
-app.get("/", (req, res) => {
-  res.json({
-    status: "running",
-    endpoints: [
-      { method: "GET", path: "/full-text?url=URL" },
-      { method: "GET", path: "/full-html?url=URL" },
-      { method: "GET", path: "/pdf?url=URL" },
-      { method: "POST", path: "/multi-elements" },
-    ]
-  });
-});
+  if (!url) {
+    return res.status(400).json({ error: "Phải có URL" });
+  }
 
-// Lấy toàn bộ text từ trang web
-app.get("/full-text", async (req, res) => {
   try {
-    const url = req.query.url;
-    if (!url) {
-      return res.status(400).json({ error: "Thiếu tham số url" });
-    }
+    const browser = await puppeteer.launch({
+      headless: "new",
+      executablePath: CHROME_EXECUTABLE_PATH,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
 
-    const browser = await launchBrowser();
     const page = await browser.newPage();
+    await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
     
-    await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
-    
-    await page.goto(url, { 
-      waitUntil: "networkidle2", 
-      timeout: 30000 
+    // Lấy toàn bộ text của trang
+    const content = await page.evaluate(() => {
+      return document.body.innerText;
     });
 
-    const text = await page.evaluate(() => document.body.innerText);
     await browser.close();
-
-    res.json({ success: true, text });
+    return res.json({ success: true, content });
   } catch (error) {
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
-    });
+    console.error("Lỗi:", error.message);
+    return res.status(500).json({ success: false, error: error.message });
   }
 });
+app.get("/render", async (req, res) => {
+  const url = req.query.url;
+  if (!url) return res.status(400).send("Missing url query param");
 
-// Lấy toàn bộ HTML từ trang web
-app.get("/full-html", async (req, res) => {
   try {
-    const url = req.query.url;
-    if (!url) {
-      return res.status(400).json({ error: "Thiếu tham số url" });
-    }
-
-    const browser = await launchBrowser();
-    const page = await browser.newPage();
-    
-    await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
-    
-    await page.goto(url, { 
-      waitUntil: "networkidle2", 
-      timeout: 30000 
+    const browser = await puppeteer.launch({
+      headless: "new",
+      executablePath: CHROME_EXECUTABLE_PATH,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
     });
 
+    const page = await browser.newPage();
+
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
+    );
+
+    await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
+
     const html = await page.content();
+
     await browser.close();
 
     res.set("Content-Type", "text/html");
-    res.send(html);
+    return res.send(html);
   } catch (error) {
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
-    });
+    console.error("Lỗi Puppeteer /render:", error.message);
+    return res.status(500).send("Error: " + error.message);
   }
 });
 
-// Tạo PDF từ trang web
-app.get("/pdf", async (req, res) => {
-  try {
-    const url = req.query.url;
-    if (!url) {
-      return res.status(400).json({ error: "Thiếu tham số url" });
-    }
-
-    const browser = await launchBrowser();
-    const page = await browser.newPage();
-    
-    await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
-    
-    await page.goto(url, { 
-      waitUntil: "networkidle2", 
-      timeout: 30000 
-    });
-
-    const pdf = await page.pdf({
-      format: "A4",
-      printBackground: true
-    });
-
-    await browser.close();
-
-    res.setHeader("Content-Type", "application/pdf");
-    res.send(pdf);
-  } catch (error) {
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
-    });
-  }
-});
-
-// Lấy nhiều phần tử cùng lúc
-app.post("/multi-elements", async (req, res) => {
-  try {
-    const { url, selector } = req.body;
-    if (!url || !selector) {
-      return res.status(400).json({ 
-        error: "Thiếu url hoặc selector" 
-      });
-    }
-
-    const browser = await launchBrowser();
-    const page = await browser.newPage();
-    
-    await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
-    
-    await page.goto(url, { 
-      waitUntil: "networkidle2", 
-      timeout: 30000 
-    });
-
-    const elements = await page.$$eval(selector, (nodes) => 
-      nodes.map((n) => n.innerText)
-    );
-
-    await browser.close();
-
-    res.json({ success: true, elements });
-  } catch (error) {
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
-    });
-  }
+app.get("/", (req, res) => {
+  res.send("✅ Puppeteer Render API is running.");
 });
 
 app.listen(PORT, () => {
-  console.log(`Server đang chạy trên cổng ${PORT}`);
+  console.log(`✅ Server is listening on port ${PORT}`);
 });
