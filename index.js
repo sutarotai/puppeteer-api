@@ -2,13 +2,65 @@ const express = require("express");
 const cors = require("cors");
 const puppeteer = require("puppeteer-core");
 const app = express();
+const userAgent = require('user-agents');
 
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
 
-const CHROME_EXECUTABLE_PATH = "/usr/bin/chromium"; // optional, thêm nếu biết chính xác
+const CHROME_EXECUTABLE_PATH = "/usr/bin/chromium";
+
+// Cấu hình Puppeteer nâng cao
+const stealthConfig = {
+  args: [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-infobars",
+    "--window-position=0,0",
+    "--ignore-certificate-errors",
+    "--ignore-certificate-errors-spki-list",
+    "--disable-web-security",
+    "--disable-features=IsolateOrigins,site-per-process",
+    "--disable-blink-features=AutomationControlled"
+  ],
+  headless: "new",
+  executablePath: CHROME_EXECUTABLE_PATH,
+  ignoreHTTPSErrors: true,
+};
+
+// Middleware giả lập trình duyệt
+const emulateBrowser = async (page) => {
+  // Sử dụng user-agent ngẫu nhiên
+  const randomUserAgent = new userAgent({ deviceCategory: 'desktop' });
+  await page.setUserAgent(randomUserAgent.toString());
+  
+  // Che dấu dấu hiệu Puppeteer
+  await page.evaluateOnNewDocument(() => {
+    delete navigator.__proto__.webdriver;
+    Object.defineProperty(navigator, 'webdriver', { get: () => false });
+    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
+    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+  });
+
+  // Thiết lập viewport ngẫu nhiên
+  await page.setViewport({
+    width: 1280 + Math.floor(Math.random() * 100),
+    height: 800 + Math.floor(Math.random() * 100),
+    deviceScaleFactor: 1,
+    hasTouch: false,
+    isLandscape: false,
+    isMobile: false,
+  });
+
+  // Thêm header HTTP ngẫu nhiên
+  await page.setExtraHTTPHeaders({
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+    'Upgrade-Insecure-Requests': '1',
+  });
+};
 
 app.post("/extract-all-text", async (req, res) => {
   const { url } = req.body;
@@ -17,26 +69,44 @@ app.post("/extract-all-text", async (req, res) => {
     return res.status(400).json({ error: "Phải có URL" });
   }
 
+  let browser;
   try {
-    const browser = await puppeteer.launch({
-      headless: "new",
-      executablePath: CHROME_EXECUTABLE_PATH,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    browser = await puppeteer.launch(stealthConfig);
+    const page = await browser.newPage();
+    
+    // Áp dụng các biện pháp giả lập
+    await emulateBrowser(page);
+    
+    // Thêm delay ngẫu nhiên giữa các hành động
+    await page.goto(url, { 
+      waitUntil: "networkidle2", 
+      timeout: 120000,
+      referer: 'https://www.google.com/',
     });
 
-    const page = await browser.newPage();
-    await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
+    // Thêm delay giả lập người dùng
+    await page.waitForTimeout(2000 + Math.random() * 3000);
     
-    // Lấy toàn bộ text của trang
+    // Lấy nội dung với cách tiếp cận ẩn danh
     const content = await page.evaluate(() => {
-      return document.body.innerText;
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNode(document.body);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      return selection.toString();
     });
 
     await browser.close();
     return res.json({ success: true, content });
   } catch (error) {
-    console.error("Lỗi:", error.message);
-    return res.status(500).json({ success: false, error: error.message });
+    console.error("Lỗi:", error);
+    if (browser) await browser.close();
+    return res.status(500).json({ 
+      success: false, 
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
 
