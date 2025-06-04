@@ -1,131 +1,92 @@
 const express = require("express");
-const puppeteer = require("puppeteer-core");
 const cors = require("cors");
-
+const puppeteer = require("puppeteer-core");
 const app = express();
+
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
 
-const CHROME_EXECUTABLE_PATH = "/usr/bin/chromium"; // Railway dùng chromium gói sẵn
+const CHROME_EXECUTABLE_PATH = "/usr/bin/chromium"; // optional, thêm nếu biết chính xác
 
-// ✅ 1. Trả về API bị ẩn (bắt các request JSON)
-app.post("/api-capture", async (req, res) => {
-  const { url } = req.body;
-  if (!url) return res.status(400).json({ error: "Thiếu URL" });
+app.post("/extract", async (req, res) => {
+  const { url, selector, xpath } = req.body;
 
-  const browser = await puppeteer.launch({
-    headless: "new",
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
+  if (!url || (!selector && !xpath)) {
+    return res.status(400).json({ error: "Phải có url và selector hoặc xpath" });
+  }
 
-  const page = await browser.newPage();
-  const apiResponses = [];
+  try {
+    const browser = await puppeteer.launch({
+      headless: "new",
+      executablePath: CHROME_EXECUTABLE_PATH,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
 
-  page.on("response", async (response) => {
-    const req = response.request();
-    const type = response.headers()["content-type"] || "";
-    if (type.includes("application/json")) {
-      try {
-        const data = await response.json();
-        apiResponses.push({
-          url: req.url(),
-          data,
-        });
-      } catch {}
+    const page = await browser.newPage();
+
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
+    );
+
+    await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
+
+    let content;
+
+    if (selector) {
+      await page.waitForSelector(selector, { timeout: 30000 });
+      content = await page.$eval(selector, el => el.innerText.trim());
+    } else if (xpath) {
+      await page.waitForXPath(xpath, { timeout: 30000 });
+      const [elHandle] = await page.$x(xpath);
+      content = await page.evaluate(el => el.textContent.trim(), elHandle);
     }
-  });
 
-  await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
-  await page.waitForTimeout(5000); // chờ cho API chạy
+    await browser.close();
 
-  await browser.close();
-  return res.json({ success: true, apiResponses });
+    return res.json({ success: true, content });
+  } catch (error) {
+    console.error("Lỗi Puppeteer:", error.message);
+    return res.status(500).json({ success: false, error: error.message });
+  }
 });
 
-// ✅ 2. Trả về page.content() — toàn HTML đã render
-app.post("/html", async (req, res) => {
-  const { url } = req.body;
-  if (!url) return res.status(400).json({ error: "Thiếu URL" });
+app.get("/render", async (req, res) => {
+  const url = req.query.url;
+  if (!url) return res.status(400).send("Missing url query param");
 
-  const browser = await puppeteer.launch({
-    headless: "new",
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
+  try {
+    const browser = await puppeteer.launch({
+      headless: "new",
+      executablePath: CHROME_EXECUTABLE_PATH,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
 
-  const page = await browser.newPage();
-  await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
+    const page = await browser.newPage();
 
-  const html = await page.content();
-  await browser.close();
-  return res.send(html);
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
+    );
+
+    await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
+
+    const html = await page.content();
+
+    await browser.close();
+
+    res.set("Content-Type", "text/html");
+    return res.send(html);
+  } catch (error) {
+    console.error("Lỗi Puppeteer /render:", error.message);
+    return res.status(500).send("Error: " + error.message);
+  }
 });
 
-// ✅ 3. Trả về document.body.innerText — toàn bộ văn bản
-app.post("/text", async (req, res) => {
-  const { url } = req.body;
-  if (!url) return res.status(400).json({ error: "Thiếu URL" });
-
-  const browser = await puppeteer.launch({
-    headless: "new",
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
-
-  const page = await browser.newPage();
-  await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
-
-  const text = await page.evaluate(() => document.body.innerText);
-  await browser.close();
-  return res.send(text);
-});
-
-// ✅ 4. Trả về PDF của toàn trang
-app.post("/pdf", async (req, res) => {
-  const { url } = req.body;
-  if (!url) return res.status(400).json({ error: "Thiếu URL" });
-
-  const browser = await puppeteer.launch({
-    headless: "new",
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
-
-  const page = await browser.newPage();
-  await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
-
-  const pdfBuffer = await page.pdf({ format: "A4" });
-  await browser.close();
-
-  res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", "inline; filename=page.pdf");
-  return res.send(pdfBuffer);
-});
-
-// ✅ 5. Trả về nhiều phần tử theo selector (mảng nội dung)
-app.post("/extract-list", async (req, res) => {
-  const { url, selector } = req.body;
-  if (!url || !selector) return res.status(400).json({ error: "Thiếu URL hoặc selector" });
-
-  const browser = await puppeteer.launch({
-    headless: "new",
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
-
-  const page = await browser.newPage();
-  await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
-
-  await page.waitForSelector(selector, { timeout: 20000 });
-  const items = await page.$$eval(selector, els => els.map(el => el.innerText.trim()));
-
-  await browser.close();
-  return res.json({ success: true, items });
-});
-
-// ✅ Root
 app.get("/", (req, res) => {
-  res.send("🧠 Puppeteer API Server is running.");
+  res.send("✅ Puppeteer Render API is running.");
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Server is running on port ${PORT}`);
+  console.log(`✅ Server is listening on port ${PORT}`);
 });
