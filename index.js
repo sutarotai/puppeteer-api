@@ -40,6 +40,40 @@ app.post("/render", async (req, res) => {
 app.get("/", (req, res) => {
   res.send("✅ Puppeteer Render API is running.");
 });
+app.post("/extract", async (req, res) => {
+  const { url, selector, xpath } = req.body;
+
+  if (!url || (!selector && !xpath)) {
+    return res.status(400).json({ error: "Phải có url và selector hoặc xpath" });
+  }
+
+  try {
+    const browser = await puppeteer.launch({
+      headless: "new",
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+
+    const page = await browser.newPage();
+    await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
+
+    let content;
+
+    if (selector) {
+      await page.waitForSelector(selector, { timeout: 15000 });
+      content = await page.$eval(selector, el => el.innerText.trim());
+    } else if (xpath) {
+      await page.waitForXPath(xpath, { timeout: 15000 });
+      const [elHandle] = await page.$x(xpath);
+      content = await page.evaluate(el => el.textContent.trim(), elHandle);
+    }
+
+    await browser.close();
+    return res.json({ success: true, content });
+  } catch (error) {
+    console.error("Lỗi Puppeteer:", error.message);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 app.listen(PORT, () => {
   console.log(`✅ Server is listening on port ${PORT}`);
