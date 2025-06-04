@@ -10,11 +10,11 @@ app.use(express.json());
 
 const CHROME_EXECUTABLE_PATH = "/usr/bin/chromium"; // optional, thêm nếu biết chính xác
 
-app.post("/extract", async (req, res) => {
-  const { url, selector, xpath } = req.body;
+app.post("/extract-all-text", async (req, res) => {
+  const { url } = req.body;
 
-  if (!url || (!selector && !xpath)) {
-    return res.status(400).json({ error: "Phải có url và selector hoặc xpath" });
+  if (!url) {
+    return res.status(400).json({ error: "Phải có URL" });
   }
 
   try {
@@ -25,29 +25,17 @@ app.post("/extract", async (req, res) => {
     });
 
     const page = await browser.newPage();
-
-    await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
-    );
-
     await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
-
-    let content;
-
-    if (selector) {
-      await page.waitForSelector(selector, { timeout: 30000 });
-      content = await page.$eval(selector, el => el.innerText.trim());
-    } else if (xpath) {
-      await page.waitForXPath(xpath, { timeout: 30000 });
-      const [elHandle] = await page.$x(xpath);
-      content = await page.evaluate(el => el.textContent.trim(), elHandle);
-    }
+    
+    // Lấy toàn bộ text của trang
+    const content = await page.evaluate(() => {
+      return document.body.innerText;
+    });
 
     await browser.close();
-
     return res.json({ success: true, content });
   } catch (error) {
-    console.error("Lỗi Puppeteer:", error.message);
+    console.error("Lỗi:", error.message);
     return res.status(500).json({ success: false, error: error.message });
   }
 });
